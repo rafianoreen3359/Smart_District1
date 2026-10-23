@@ -1,0 +1,124 @@
+""" The university wants a terminal application to manage student records end to end. It must load data from CSV files, validate records, flag failed students, calculate late fines, and generate timestamped reports - all errors logged cleanly through custom exceptions. The system must be built with OOP, use decorators, run concurrently with `asyncio`, and operate inside a virtual environment with a secure `.env` config."""
+import csv
+import asyncio
+import logging
+import os
+from io import StringIO
+from datetime import datetime
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(levelname)s: %(message)s"
+)
+
+CSV_DATA = """student_id,name,marks,late_days
+101,Ali,85,2
+102,Sara,42,3
+103,Ahmed,65,0
+104,,70,1
+105,Ayesha,110,2
+"""
+
+FINE_PER_DAY = int(os.getenv("LATE_FINE_PER_DAY", "10"))
+
+class InvalidStudentError(Exception):
+    pass
+
+class Student:
+    def __init__(self, student_id, name, marks, late_days):
+        self.student_id = student_id
+        self.name = name
+        self.marks = marks
+        self.late_days = late_days
+
+    def is_failed(self):
+        return self.marks < 50
+
+    def calculate_fine(self):
+        return self.late_days * FINE_PER_DAY
+
+def log_action(func):
+    def wrapper(*args, **kwargs):
+        logging.info("Running: %s", func.__name__)
+        return func(*args, **kwargs)
+    return wrapper
+
+def validate_student(row):
+    try:
+        student_id = row["student_id"].strip()
+        name = row["name"].strip()
+        marks = int(row["marks"])
+        late_days = int(row["late_days"])
+
+        if not student_id or not name:
+            raise InvalidStudentError("Student ID or name is missing")
+
+        if not 0 <= marks <= 100:
+            raise InvalidStudentError("Marks must be between 0 and 100")
+
+        if late_days < 0:
+            raise InvalidStudentError("Late days cannot be negative")
+
+        return Student(student_id, name, marks, late_days)
+
+    except (ValueError, KeyError) as error:
+        raise InvalidStudentError(
+            f"Invalid or missing data: {error}"
+        ) from error
+
+async def process_student(row):
+    await asyncio.sleep(0)
+
+    try:
+        return validate_student(row)
+
+    except InvalidStudentError as error:
+        logging.error(
+            "Student record rejected: %s | Data: %s",
+            error, row
+        )
+        return None
+
+@log_action
+def generate_report(students):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    print("\n===== ACADEMIC PORTAL REPORT =====")
+    print("Generated:", timestamp)
+
+    for student in students:
+        status = "FAILED" if student.is_failed() else "PASSED"
+
+        print(
+            f"ID: {student.student_id} | "
+            f"Name: {student.name} | "
+            f"Marks: {student.marks} | "
+            f"Status: {status} | "
+            f"Fine: Rs. {student.calculate_fine()}"
+        )
+
+    failed_count = sum(s.is_failed() for s in students)
+    print("Total valid students:", len(students))
+    print("Failed students:", failed_count)
+    print("Passed students:", len(students) - failed_count)
+    print("Total late fines: Rs.", sum(s.calculate_fine() for s in students))
+
+async def main():
+    try:
+        reader = csv.DictReader(StringIO(CSV_DATA))
+        rows = list(reader)
+
+        results = await asyncio.gather(
+            *(process_student(row) for row in rows)
+        )
+
+        valid_students = [s for s in results if s is not None]
+
+        generate_report(valid_students)
+
+    except Exception:
+        logging.exception("Unexpected error in Academic Portal")
+
+if __name__ == "__main__":
+asyncio.run(main())
+
